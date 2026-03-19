@@ -181,6 +181,63 @@ tr:hover td{background:rgba(88,166,255,.03)}
 }
 @keyframes shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 
+/* === BOT STATUS PANEL === */
+.bot-bar{
+  display:flex;align-items:stretch;gap:12px;margin-bottom:12px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:12px 16px;flex-wrap:wrap;position:relative;overflow:hidden;
+}
+.bot-bar::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(63,185,80,.2),transparent);
+}
+.bot-section{display:flex;flex-direction:column;gap:4px;min-width:120px}
+.bot-section-label{font-family:var(--font-mono);font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)}
+.bot-section-val{font-family:var(--font-mono);font-size:.82rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px}
+.bot-divider{width:1px;background:var(--border);margin:0 4px;flex-shrink:0}
+.bot-actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bot-status-icon{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
+.bot-status-icon.running{background:var(--green);box-shadow:0 0 8px rgba(63,185,80,.5);animation:pulse-dot 2s infinite}
+.bot-status-icon.crashed{background:var(--red);box-shadow:0 0 8px rgba(248,81,73,.4)}
+.bot-status-icon.deploying{background:var(--yellow);box-shadow:0 0 8px rgba(210,153,34,.4);animation:pulse-dot 1s infinite}
+.bot-status-icon.unknown{background:var(--text-muted)}
+.btn-danger{background:var(--red-dim);color:var(--red);border-color:rgba(248,81,73,.3)}
+.btn-danger:hover{background:var(--red);color:#fff;border-color:var(--red)}
+.btn-success{background:var(--green-dim);color:var(--green);border-color:rgba(63,185,80,.3)}
+.btn-success:hover{background:var(--green);color:#000;border-color:var(--green)}
+.railway-cfg{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);
+  flex-wrap:wrap;
+}
+.railway-cfg input{
+  font-family:var(--font-mono);font-size:.72rem;padding:4px 8px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:4px;
+  color:var(--text-primary);outline:none;transition:border-color .2s;
+}
+.railway-cfg input:focus{border-color:var(--blue)}
+.railway-cfg input::placeholder{color:var(--text-muted)}
+.railway-cfg label{font-family:var(--font-mono);font-size:.65rem;color:var(--text-muted)}
+.bot-log-box{
+  margin-top:8px;background:var(--bg-deep);border:1px solid var(--border);
+  border-radius:var(--radius);padding:8px 12px;max-height:150px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:.7rem;color:var(--text-secondary);
+  line-height:1.6;display:none;
+}
+.bot-log-box .log-line{border-bottom:1px solid rgba(30,42,58,.2);padding:2px 0}
+.bot-log-box .log-ts{color:var(--text-muted);margin-right:8px}
+.confirm-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9998;
+  display:flex;align-items:center;justify-content:center;
+}
+.confirm-box{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:24px;max-width:380px;width:90%;text-align:center;
+}
+.confirm-box h3{font-family:var(--font-mono);font-size:.95rem;margin-bottom:8px;color:var(--text-primary)}
+.confirm-box p{font-family:var(--font-mono);font-size:.75rem;color:var(--text-secondary);margin-bottom:16px}
+.confirm-box .btn-row{display:flex;gap:10px;justify-content:center}
+
 /* === MISC === */
 .mt-12{margin-top:12px}
 .fade-in{animation:fadeIn .4s ease}
@@ -208,6 +265,55 @@ tr:hover td{background:rgba(88,166,255,.03)}
       <span id="metaTimer">自动刷新: 30s</span>
     </div>
   </div>
+
+  <!-- BOT STATUS BAR -->
+  <div class="bot-bar" id="botBar">
+    <div class="bot-section">
+      <span class="bot-section-label">程序状态</span>
+      <span class="bot-section-val"><span class="bot-status-icon unknown" id="botStatusIcon"></span><span id="botStatusText">未连接</span></span>
+    </div>
+    <div class="bot-divider"></div>
+    <div class="bot-section">
+      <span class="bot-section-label">部署平台</span>
+      <span class="bot-section-val" id="botPlatform">Railway</span>
+    </div>
+    <div class="bot-divider"></div>
+    <div class="bot-section">
+      <span class="bot-section-label">运行时长</span>
+      <span class="bot-section-val" id="botUptime">--</span>
+    </div>
+    <div class="bot-divider"></div>
+    <div class="bot-section">
+      <span class="bot-section-label">最近部署</span>
+      <span class="bot-section-val" id="botLastDeploy">--</span>
+    </div>
+    <div class="bot-divider"></div>
+    <div class="bot-section">
+      <span class="bot-section-label">循环间隔</span>
+      <span class="bot-section-val" id="botInterval">300s</span>
+    </div>
+    <div class="bot-actions">
+      <button class="btn btn-sm" onclick="toggleRailwayCfg()" id="railwayCfgBtn">⚙ Railway 配置</button>
+      <button class="btn btn-sm btn-success" onclick="confirmRestart()" id="restartBtn" disabled>↻ 重启</button>
+      <button class="btn btn-sm btn-danger" onclick="confirmRedeploy()" id="redeployBtn" disabled>⟳ 重新部署</button>
+      <button class="btn btn-sm" onclick="toggleBotLog()" id="logToggleBtn">▾ 日志</button>
+    </div>
+  </div>
+  <!-- Railway Config (hidden) -->
+  <div class="railway-cfg" id="railwayCfg" style="display:none;margin-bottom:12px">
+    <label>Railway Token:</label>
+    <input id="rwToken" type="password" placeholder="Railway API Token" style="width:200px" autocomplete="off">
+    <label>Project ID:</label>
+    <input id="rwProject" type="text" placeholder="项目 ID" style="width:160px">
+    <label>Service ID:</label>
+    <input id="rwService" type="text" placeholder="服务 ID" style="width:160px">
+    <label>Environment ID:</label>
+    <input id="rwEnv" type="text" placeholder="环境 ID (可选)" style="width:160px">
+    <button class="btn btn-sm btn-primary" onclick="saveRailwayCfg()">保存</button>
+    <button class="btn btn-sm" onclick="testRailwayConnection()">测试连接</button>
+  </div>
+  <!-- Bot Log -->
+  <div class="bot-log-box" id="botLogBox"></div>
 
   <!-- STAT CARDS -->
   <div class="grid grid-top mt-12" id="statCards">
@@ -765,6 +871,304 @@ function startTicker() {
     const ago = Math.floor((Date.now() - lastUpdateTs) / 1000);
     el.textContent = '上次更新: ' + ago + '秒前';
   }, 1000);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Railway Bot Management
+// ═══════════════════════════════════════════════════════════
+
+const RW_GRAPHQL = 'https://backboard.railway.com/graphql/v2';
+let rwConfig = JSON.parse(localStorage.getItem('fl_rw_config') || 'null') || {};
+let botDeployStartTs = null;
+
+// Init Railway on load
+(function initRailway() {
+  if (rwConfig.token) {
+    document.getElementById('rwToken').value = '••••••••';
+    document.getElementById('rwProject').value = rwConfig.projectId || '';
+    document.getElementById('rwService').value = rwConfig.serviceId || '';
+    document.getElementById('rwEnv').value = rwConfig.envId || '';
+    enableRailwayBtns();
+    fetchRailwayStatus();
+    setInterval(fetchRailwayStatus, 30000);
+  }
+})();
+
+function toggleRailwayCfg() {
+  const el = document.getElementById('railwayCfg');
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function toggleBotLog() {
+  const el = document.getElementById('botLogBox');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (el.style.display === 'block' && rwConfig.token) fetchRailwayLogs();
+}
+
+function saveRailwayCfg() {
+  const tokenInput = document.getElementById('rwToken').value.trim();
+  if (tokenInput && !tokenInput.startsWith('••')) rwConfig.token = tokenInput;
+  rwConfig.projectId = document.getElementById('rwProject').value.trim();
+  rwConfig.serviceId = document.getElementById('rwService').value.trim();
+  rwConfig.envId = document.getElementById('rwEnv').value.trim();
+  localStorage.setItem('fl_rw_config', JSON.stringify(rwConfig));
+  document.getElementById('rwToken').value = '••••••••';
+  enableRailwayBtns();
+  toast('Railway 配置已保存', 'success');
+  fetchRailwayStatus();
+  setInterval(fetchRailwayStatus, 30000);
+}
+
+function enableRailwayBtns() {
+  const ok = !!(rwConfig.token && rwConfig.serviceId);
+  document.getElementById('restartBtn').disabled = !ok;
+  document.getElementById('redeployBtn').disabled = !ok;
+}
+
+async function rwGql(query, variables) {
+  const r = await fetch(RW_GRAPHQL, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + rwConfig.token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error('Railway API error: ' + r.status + ' ' + text.slice(0, 200));
+  }
+  const json = await r.json();
+  if (json.errors) throw new Error(json.errors[0].message);
+  return json.data;
+}
+
+async function fetchRailwayStatus() {
+  if (!rwConfig.token || !rwConfig.serviceId) {
+    setBotStatus('unknown', '未配置 Railway');
+    return;
+  }
+  try {
+    const data = await rwGql(`
+      query($serviceId: String!) {
+        deployments(input: { serviceId: $serviceId }, first: 1) {
+          edges {
+            node {
+              id status createdAt updatedAt
+              staticUrl
+              meta { ... on DeploymentMeta { repo branch commitMessage } }
+            }
+          }
+        }
+      }
+    `, { serviceId: rwConfig.serviceId });
+
+    const edges = data?.deployments?.edges || [];
+    if (edges.length === 0) {
+      setBotStatus('unknown', '无部署记录');
+      return;
+    }
+    const d = edges[0].node;
+    const status = (d.status || '').toUpperCase();
+    const created = d.createdAt;
+    botDeployStartTs = created ? new Date(created).getTime() : null;
+
+    // Map Railway status
+    const statusMap = {
+      'SUCCESS': ['running', '运行中'],
+      'DEPLOYING': ['deploying', '部署中...'],
+      'BUILDING': ['deploying', '构建中...'],
+      'INITIALIZING': ['deploying', '初始化...'],
+      'CRASHED': ['crashed', '已崩溃'],
+      'FAILED': ['crashed', '部署失败'],
+      'REMOVED': ['crashed', '已移除'],
+      'SLEEPING': ['unknown', '休眠中'],
+    };
+    const [iconClass, label] = statusMap[status] || ['unknown', status];
+    setBotStatus(iconClass, label);
+
+    // Last deploy time
+    if (created) {
+      document.getElementById('botLastDeploy').textContent = fmtDateShort(created);
+    }
+    // Commit message
+    if (d.meta?.commitMessage) {
+      document.getElementById('botPlatform').innerHTML = 'Railway <span style="color:var(--text-muted);font-size:.65rem;margin-left:4px">' + d.meta.commitMessage.slice(0, 30) + '</span>';
+    }
+    // Uptime
+    updateUptime();
+  } catch (e) {
+    console.error('Railway status error:', e);
+    setBotStatus('unknown', '连接失败');
+    addBotLog('获取状态失败: ' + e.message, 'error');
+  }
+}
+
+function setBotStatus(iconClass, text) {
+  document.getElementById('botStatusIcon').className = 'bot-status-icon ' + iconClass;
+  document.getElementById('botStatusText').textContent = text;
+  document.getElementById('botStatusText').style.color =
+    iconClass === 'running' ? 'var(--green)' :
+    iconClass === 'crashed' ? 'var(--red)' :
+    iconClass === 'deploying' ? 'var(--yellow)' : 'var(--text-secondary)';
+}
+
+function updateUptime() {
+  const el = document.getElementById('botUptime');
+  if (!botDeployStartTs) { el.textContent = '--'; return; }
+  const diff = (Date.now() - botDeployStartTs) / 1000;
+  if (diff < 60) el.textContent = Math.floor(diff) + '秒';
+  else if (diff < 3600) el.textContent = Math.floor(diff / 60) + '分';
+  else if (diff < 86400) el.textContent = Math.floor(diff / 3600) + '时' + Math.floor((diff % 3600) / 60) + '分';
+  else el.textContent = Math.floor(diff / 86400) + '天' + Math.floor((diff % 86400) / 3600) + '时';
+}
+setInterval(updateUptime, 5000);
+
+// ── Restart (redeploy latest) ──
+function confirmRestart() {
+  showConfirm('确认重启?', '将触发 Railway 服务重新部署（使用最新代码）。当前运行中的交易循环会中断。', async () => {
+    try {
+      addBotLog('正在触发重新部署...');
+      setBotStatus('deploying', '重启中...');
+      toast('正在重启...', 'success');
+
+      // Railway serviceInstanceRedeploy
+      const envId = rwConfig.envId || null;
+      const data = await rwGql(`
+        mutation($serviceId: String!, $environmentId: String) {
+          serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
+        }
+      `, { serviceId: rwConfig.serviceId, environmentId: envId });
+
+      addBotLog('重启指令已发送，等待部署...');
+      toast('重启指令已发送', 'success');
+      // Poll status
+      setTimeout(fetchRailwayStatus, 5000);
+      setTimeout(fetchRailwayStatus, 15000);
+      setTimeout(fetchRailwayStatus, 30000);
+    } catch (e) {
+      addBotLog('重启失败: ' + e.message, 'error');
+      toast('重启失败: ' + e.message, 'error');
+      fetchRailwayStatus();
+    }
+  });
+}
+
+function confirmRedeploy() {
+  showConfirm('确认重新部署?', '将从 GitHub 拉取最新代码并重新构建部署。构建过程可能需要几分钟。', async () => {
+    try {
+      addBotLog('正在触发完整重新部署...');
+      setBotStatus('deploying', '构建部署中...');
+      toast('正在触发部署...', 'success');
+
+      const envId = rwConfig.envId || null;
+      const data = await rwGql(`
+        mutation($serviceId: String!, $environmentId: String) {
+          serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
+        }
+      `, { serviceId: rwConfig.serviceId, environmentId: envId });
+
+      addBotLog('部署指令已发送');
+      toast('部署已触发', 'success');
+      setTimeout(fetchRailwayStatus, 8000);
+      setTimeout(fetchRailwayStatus, 20000);
+      setTimeout(fetchRailwayStatus, 45000);
+      setTimeout(fetchRailwayStatus, 90000);
+    } catch (e) {
+      addBotLog('部署失败: ' + e.message, 'error');
+      toast('部署失败: ' + e.message, 'error');
+      fetchRailwayStatus();
+    }
+  });
+}
+
+// ── Logs ──
+async function fetchRailwayLogs() {
+  if (!rwConfig.token || !rwConfig.serviceId) return;
+  const box = document.getElementById('botLogBox');
+  try {
+    // Fetch recent deployments for log context
+    const data = await rwGql(`
+      query($serviceId: String!) {
+        deployments(input: { serviceId: $serviceId }, first: 5) {
+          edges {
+            node { id status createdAt meta { ... on DeploymentMeta { commitMessage } } }
+          }
+        }
+      }
+    `, { serviceId: rwConfig.serviceId });
+
+    const edges = data?.deployments?.edges || [];
+    box.innerHTML = '';
+    if (edges.length === 0) {
+      box.innerHTML = '<div class="log-line" style="color:var(--text-muted)">暂无部署记录</div>';
+      return;
+    }
+    edges.forEach(e => {
+      const d = e.node;
+      const status = d.status || 'UNKNOWN';
+      const statusColor = status === 'SUCCESS' ? 'var(--green)' : status === 'CRASHED' || status === 'FAILED' ? 'var(--red)' : 'var(--yellow)';
+      const msg = d.meta?.commitMessage || '无提交信息';
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      line.innerHTML = `<span class="log-ts">${fmtDateShort(d.createdAt)}</span><span style="color:${statusColor};font-weight:600">[${status}]</span> ${msg.slice(0,60)}`;
+      box.appendChild(line);
+    });
+  } catch (e) {
+    box.innerHTML = '<div class="log-line" style="color:var(--red)">获取日志失败: ' + e.message + '</div>';
+  }
+}
+
+async function testRailwayConnection() {
+  saveRailwayCfg();
+  try {
+    await fetchRailwayStatus();
+    const text = document.getElementById('botStatusText').textContent;
+    if (text !== '连接失败' && text !== '未配置 Railway') {
+      toast('Railway 连接成功: ' + text, 'success');
+    } else {
+      toast('Railway 连接失败，请检查 Token 和 Service ID', 'error');
+    }
+  } catch (e) {
+    toast('连接失败: ' + e.message, 'error');
+  }
+}
+
+// ── Bot Log Helper ──
+function addBotLog(msg, type) {
+  const box = document.getElementById('botLogBox');
+  box.style.display = 'block';
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  const ts = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  line.innerHTML = `<span class="log-ts">${ts}</span><span style="color:${type === 'error' ? 'var(--red)' : 'var(--text-primary)'}">${msg}</span>`;
+  box.prepend(line);
+  // Keep max 30 lines
+  while (box.children.length > 30) box.lastChild.remove();
+}
+
+// ── Confirm Dialog ──
+function showConfirm(title, desc, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-box">
+      <h3>${title}</h3>
+      <p>${desc}</p>
+      <div class="btn-row">
+        <button class="btn" id="confirmCancel">取消</button>
+        <button class="btn btn-danger" id="confirmOk">确认</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#confirmCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#confirmOk').onclick = () => { overlay.remove(); onConfirm(); };
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
+function fmtDateShort(iso) {
+  if (!iso) return '--';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  } catch { return '--'; }
 }
 </script>
 </body>
