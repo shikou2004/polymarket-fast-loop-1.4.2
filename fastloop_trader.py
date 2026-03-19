@@ -461,15 +461,30 @@ def find_best_fast_market(markets):
 # CEX Price Signal
 # =============================================================================
 
+BINANCE_ENDPOINTS = [
+    "https://api.binance.us/api/v3",
+    "https://api.binance.com/api/v3",
+    "https://data-api.binance.vision/api/v3",
+]
+
+
+def _binance_klines(symbol, interval="1m", limit=5, start_time=None):
+    """Fetch klines from Binance, trying multiple endpoints (US, global, data mirror)."""
+    params = f"?symbol={symbol}&interval={interval}&limit={limit}"
+    if start_time:
+        params += f"&startTime={start_time}"
+    for base in BINANCE_ENDPOINTS:
+        result = _api_request(f"{base}/klines{params}")
+        if result and isinstance(result, list) and len(result) > 0:
+            return result
+    return None
+
+
 def get_binance_momentum(symbol="BTCUSDT", lookback_minutes=5):
     """Get price momentum from Binance public API.
     Returns: {momentum_pct, direction, price_now, price_then, avg_volume, candles}
     """
-    url = (
-        f"https://api.binance.com/api/v3/klines"
-        f"?symbol={symbol}&interval=1m&limit={lookback_minutes}"
-    )
-    result = _api_request(url)
+    result = _binance_klines(symbol, interval="1m", limit=lookback_minutes)
     if not result or isinstance(result, dict):
         return None
 
@@ -539,11 +554,7 @@ def _norm_cdf(x):
 def get_binance_price_at(symbol, start_ms):
     """Get BTC close price of the 1-minute candle starting at start_ms (unix ms).
     Used to fetch the reference price at market open for the N(d) model."""
-    url = (
-        f"https://api.binance.com/api/v3/klines"
-        f"?symbol={symbol}&interval=1m&startTime={start_ms}&limit=1"
-    )
-    result = _api_request(url)
+    result = _binance_klines(symbol, interval="1m", limit=1, start_time=start_ms)
     if isinstance(result, list) and len(result) > 0:
         return float(result[0][4])  # close price
     return None
