@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FastLoop 交易仪表盘</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+/* === RESET & VARIABLES === */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-deep:#080b10;--bg-base:#0d1117;--bg-card:#131920;--bg-card-alt:#161d26;
+  --bg-elevated:#1c2530;--border:#1e2a3a;--border-active:#2d4a6f;
+  --text-primary:#e6edf3;--text-secondary:#8b949e;--text-muted:#484f58;
+  --green:#3fb950;--green-dim:#1a3a2a;--red:#f85149;--red-dim:#3a1a1a;
+  --blue:#58a6ff;--blue-dim:#1a2a3a;--yellow:#d29922;--yellow-dim:#2a2a1a;
+  --cyan:#39d2c0;--purple:#bc8cff;
+  --font-mono:'IBM Plex Mono',monospace;--font-body:'Noto Sans SC',system-ui,sans-serif;
+  --radius:6px;--radius-lg:10px;
+}
+html{font-size:14px;background:var(--bg-deep)}
+body{font-family:var(--font-body);color:var(--text-primary);background:var(--bg-deep);min-height:100vh;overflow-x:hidden}
+
+/* === SCROLLBAR === */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg-deep)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+
+/* === GRID NOISE OVERLAY === */
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.008) 2px,rgba(255,255,255,.008) 4px);
+  mix-blend-mode:overlay;
+}
+
+/* === LAYOUT === */
+.shell{max-width:1440px;margin:0 auto;padding:12px 16px 40px}
+
+/* === TOP BAR === */
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  margin-bottom:12px;flex-wrap:wrap;
+}
+.topbar-brand{display:flex;align-items:center;gap:10px;margin-right:auto}
+.topbar-brand svg{flex-shrink:0}
+.topbar-title{font-family:var(--font-mono);font-weight:700;font-size:1.05rem;letter-spacing:-.02em;color:var(--text-primary)}
+.topbar-version{font-family:var(--font-mono);font-size:.7rem;color:var(--text-muted);background:var(--bg-elevated);padding:2px 7px;border-radius:3px}
+
+.conn-group{display:flex;align-items:center;gap:8px}
+.conn-input{
+  font-family:var(--font-mono);font-size:.78rem;padding:6px 10px;width:260px;
+  background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text-primary);outline:none;transition:border-color .2s;
+}
+.conn-input:focus{border-color:var(--blue)}
+.conn-input::placeholder{color:var(--text-muted)}
+.btn{
+  font-family:var(--font-mono);font-size:.75rem;font-weight:600;padding:6px 14px;
+  border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;
+  transition:all .15s;background:var(--bg-elevated);color:var(--text-primary);
+}
+.btn:hover{border-color:var(--blue);color:var(--blue)}
+.btn-primary{background:var(--blue);color:#000;border-color:var(--blue)}
+.btn-primary:hover{background:#79b8ff;border-color:#79b8ff}
+.btn-sm{padding:4px 10px;font-size:.7rem}
+
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.status-dot.off{background:var(--text-muted);box-shadow:0 0 0 2px rgba(72,79,88,.3)}
+.status-dot.on{background:var(--green);box-shadow:0 0 6px rgba(63,185,80,.5);animation:pulse-dot 2s infinite}
+.status-dot.warn{background:var(--yellow);box-shadow:0 0 6px rgba(210,153,34,.4)}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.5}}
+
+.topbar-meta{display:flex;align-items:center;gap:16px;font-family:var(--font-mono);font-size:.72rem;color:var(--text-secondary)}
+.topbar-meta span{display:flex;align-items:center;gap:4px}
+
+/* === GRID === */
+.grid{display:grid;gap:12px}
+.grid-top{grid-template-columns:repeat(4,1fr)}
+.grid-mid{grid-template-columns:1fr 1fr}
+.grid-bot{grid-template-columns:2fr 1fr}
+@media(max-width:1100px){.grid-top{grid-template-columns:repeat(2,1fr)}.grid-mid,.grid-bot{grid-template-columns:1fr}}
+@media(max-width:600px){.grid-top{grid-template-columns:1fr}}
+
+/* === CARD === */
+.card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:16px;position:relative;overflow:hidden;
+}
+.card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(88,166,255,.15),transparent);
+}
+.card-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);
+}
+.card-label{
+  font-family:var(--font-mono);font-size:.72rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);
+  display:flex;align-items:center;gap:6px;
+}
+.card-label .ico{opacity:.5;font-size:.85rem}
+.card-badge{font-family:var(--font-mono);font-size:.65rem;padding:2px 8px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted)}
+
+/* === STAT CARDS === */
+.stat-val{font-family:var(--font-mono);font-size:1.7rem;font-weight:700;line-height:1.1;margin:6px 0 2px}
+.stat-sub{font-family:var(--font-mono);font-size:.7rem;color:var(--text-muted)}
+.stat-val.green{color:var(--green)}.stat-val.red{color:var(--red)}.stat-val.blue{color:var(--blue)}.stat-val.yellow{color:var(--yellow)}
+
+/* === TABLES === */
+.tbl-wrap{overflow-x:auto;margin:0 -16px;padding:0 16px}
+table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:.75rem}
+th{
+  text-align:left;padding:8px 10px;font-weight:600;font-size:.68rem;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);
+  border-bottom:1px solid var(--border);white-space:nowrap;
+}
+td{padding:8px 10px;border-bottom:1px solid rgba(30,42,58,.4);white-space:nowrap;color:var(--text-secondary)}
+tr:hover td{background:rgba(88,166,255,.03)}
+.td-green{color:var(--green)}.td-red{color:var(--red)}.td-blue{color:var(--blue)}.td-yellow{color:var(--yellow)}
+.side-tag{
+  font-size:.65rem;font-weight:700;padding:2px 6px;border-radius:3px;display:inline-block;
+}
+.side-yes{background:var(--green-dim);color:var(--green)}
+.side-no{background:var(--red-dim);color:var(--red)}
+.result-win{color:var(--green)}.result-loss{color:var(--red)}.result-pending{color:var(--yellow)}
+
+/* === SIGNAL PANEL === */
+.sig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:700px){.sig-grid{grid-template-columns:1fr 1fr}}
+.sig-item{background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px}
+.sig-label{font-family:var(--font-mono);font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.sig-val{font-family:var(--font-mono);font-size:1.05rem;font-weight:600}
+.sig-val.up{color:var(--green)}.sig-val.down{color:var(--red)}.sig-val.neutral{color:var(--text-secondary)}
+
+/* === CHART === */
+.chart-wrap{position:relative;height:200px;background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.chart-wrap canvas{width:100%!important;height:100%!important}
+.chart-empty{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-mono);font-size:.78rem;color:var(--text-muted);
+}
+
+/* === CONFIG === */
+.cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}
+@media(max-width:700px){.cfg-grid{grid-template-columns:1fr}}
+.cfg-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(30,42,58,.3)}
+.cfg-key{font-family:var(--font-mono);font-size:.72rem;color:var(--text-muted)}
+.cfg-val{font-family:var(--font-mono);font-size:.75rem;font-weight:500;color:var(--text-primary)}
+.cfg-val .check{color:var(--green)}.cfg-val .cross{color:var(--red)}
+
+/* === EMPTY STATE === */
+.empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:30px 20px;text-align:center;
+}
+.empty-ico{font-size:2rem;margin-bottom:8px;opacity:.25}
+.empty-text{font-family:var(--font-mono);font-size:.78rem;color:var(--text-muted)}
+
+/* === TOAST === */
+.toast-container{position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:8px}
+.toast{
+  font-family:var(--font-mono);font-size:.75rem;padding:10px 16px;
+  border-radius:var(--radius);border:1px solid var(--border);
+  background:var(--bg-card);color:var(--text-primary);
+  animation:toast-in .3s ease;box-shadow:0 8px 24px rgba(0,0,0,.4);
+}
+.toast.error{border-color:var(--red);background:var(--red-dim)}
+.toast.success{border-color:var(--green);background:var(--green-dim)}
+@keyframes toast-in{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+
+/* === LOADING SHIMMER === */
+.shimmer{position:relative;overflow:hidden;background:var(--bg-elevated);border-radius:4px}
+.shimmer::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent);
+  animation:shimmer 1.5s infinite;
+}
+@keyframes shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+
+/* === MISC === */
+.mt-12{margin-top:12px}
+.fade-in{animation:fadeIn .4s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="4" stroke="#58a6ff" stroke-width="1.5"/><path d="M7 14l3-4 3 2 4-5" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="17" cy="7" r="1.5" fill="#f85149"/></svg>
+      <span class="topbar-title">FastLoop 仪表盘</span>
+      <span class="topbar-version">v1.4.2</span>
+    </div>
+    <div class="conn-group">
+      <span class="status-dot off" id="connDot"></span>
+      <input class="conn-input" id="apiKeyInput" type="password" placeholder="输入 Simmer API Key..." autocomplete="off">
+      <button class="btn btn-primary" id="connectBtn" onclick="handleConnect()">连接</button>
+      <button class="btn btn-sm" onclick="refreshAll()" title="手动刷新">↻ 刷新</button>
+    </div>
+    <div class="topbar-meta">
+      <span id="metaUpdate">上次更新: --</span>
+      <span id="metaTimer">自动刷新: 30s</span>
+    </div>
+  </div>
+
+  <!-- STAT CARDS -->
+  <div class="grid grid-top mt-12" id="statCards">
+    <div class="card">
+      <div class="card-label"><span class="ico">◈</span> 账户余额</div>
+      <div class="stat-val blue" id="statBalance">--</div>
+      <div class="stat-sub" id="statBalanceSub">等待连接</div>
+    </div>
+    <div class="card">
+      <div class="card-label"><span class="ico">△</span> 累计盈亏</div>
+      <div class="stat-val" id="statPnl">--</div>
+      <div class="stat-sub" id="statPnlSub">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label"><span class="ico">⊕</span> 胜率</div>
+      <div class="stat-val" id="statWinRate">--</div>
+      <div class="stat-sub" id="statWinRateSub">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label"><span class="ico">⟐</span> 今日交易</div>
+      <div class="stat-val yellow" id="statTrades">--</div>
+      <div class="stat-sub" id="statTradesSub">--</div>
+    </div>
+  </div>
+
+  <!-- SIGNAL + CHART -->
+  <div class="grid grid-mid mt-12">
+    <!-- SIGNAL MONITOR -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">◉</span> 信号监控</span>
+        <span class="card-badge" id="sigAsset">BTC / USDT</span>
+      </div>
+      <div class="sig-grid" id="sigGrid">
+        <div class="sig-item"><div class="sig-label">BTC 价格</div><div class="sig-val neutral" id="sigPrice">--</div></div>
+        <div class="sig-item"><div class="sig-label">5分钟动量</div><div class="sig-val neutral" id="sigMomentum">--</div></div>
+        <div class="sig-item"><div class="sig-label">成交量比</div><div class="sig-val neutral" id="sigVolume">--</div></div>
+        <div class="sig-item"><div class="sig-label">短期 (3m)</div><div class="sig-val neutral" id="sigShort">--</div></div>
+        <div class="sig-item"><div class="sig-label">中期 (5m)</div><div class="sig-val neutral" id="sigMed">--</div></div>
+        <div class="sig-item"><div class="sig-label">长期 (15m)</div><div class="sig-val neutral" id="sigLong">--</div></div>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+        <span class="sig-label" style="margin:0">多时间框架</span>
+        <span class="card-badge" id="sigMtfBadge" style="background:var(--bg-deep)">等待数据</span>
+      </div>
+    </div>
+
+    <!-- P&L CHART -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">⊿</span> 累计盈亏曲线</span>
+        <span class="card-badge" id="chartCount">0 笔交易</span>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <canvas id="pnlCanvas"></canvas>
+        <div class="chart-empty" id="chartEmpty">暂无交易数据</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- POSITIONS + CONFIG -->
+  <div class="grid grid-bot mt-12">
+    <!-- ACTIVE POSITIONS -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">⬡</span> 活跃持仓</span>
+        <span class="card-badge" id="posCount">0 个</span>
+      </div>
+      <div class="tbl-wrap" id="posWrap">
+        <div class="empty" id="posEmpty"><div class="empty-ico">⬡</div><div class="empty-text">暂无活跃持仓</div></div>
+        <table id="posTable" style="display:none">
+          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>入场价</th><th>当前价</th><th>未实现盈亏</th><th>剩余时间</th></tr></thead>
+          <tbody id="posBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CONFIG -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">⚙</span> 策略配置</span>
+        <span class="card-badge">Quant v2</span>
+      </div>
+      <div class="cfg-grid" id="cfgGrid">
+        <div class="cfg-row"><span class="cfg-key">入场阈值</span><span class="cfg-val" id="cfgEntry">0.05</span></div>
+        <div class="cfg-row"><span class="cfg-key">最小动量</span><span class="cfg-val" id="cfgMomentum">0.5%</span></div>
+        <div class="cfg-row"><span class="cfg-key">最大仓位</span><span class="cfg-val" id="cfgMaxPos">$5.00</span></div>
+        <div class="cfg-row"><span class="cfg-key">Kelly 系数</span><span class="cfg-val" id="cfgKelly">25%</span></div>
+        <div class="cfg-row"><span class="cfg-key">α 提取率</span><span class="cfg-val" id="cfgAlpha">90%</span></div>
+        <div class="cfg-row"><span class="cfg-key">多时间确认</span><span class="cfg-val"><span class="check">✓</span></span></div>
+        <div class="cfg-row"><span class="cfg-key">动态波动率</span><span class="cfg-val"><span class="check">✓</span></span></div>
+        <div class="cfg-row"><span class="cfg-key">每日预算</span><span class="cfg-val" id="cfgBudget">$10.00</span></div>
+        <div class="cfg-row"><span class="cfg-key">交易窗口</span><span class="cfg-val" id="cfgWindow">5m</span></div>
+        <div class="cfg-row"><span class="cfg-key">信号源</span><span class="cfg-val" id="cfgSignal">Binance</span></div>
+        <div class="cfg-row"><span class="cfg-key">公允模型</span><span class="cfg-val" id="cfgFV"><span class="cross">✗</span></span></div>
+        <div class="cfg-row"><span class="cfg-key">订单类型</span><span class="cfg-val" id="cfgOrder">GTC</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRADE HISTORY -->
+  <div class="grid mt-12">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">⧉</span> 交易记录</span>
+        <span class="card-badge" id="histCount">0 笔</span>
+      </div>
+      <div class="tbl-wrap" id="histWrap">
+        <div class="empty" id="histEmpty"><div class="empty-ico">⧉</div><div class="empty-text">暂无交易记录</div></div>
+        <table id="histTable" style="display:none">
+          <thead><tr><th>时间</th><th>市场</th><th>方向</th><th>金额</th><th>份额</th><th>结果</th><th>盈亏</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- FAST MARKETS -->
+  <div class="grid mt-12">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-label"><span class="ico">⚡</span> 活跃快速市场</span>
+        <span class="card-badge" id="fmCount">0 个</span>
+      </div>
+      <div class="tbl-wrap" id="fmWrap">
+        <div class="empty" id="fmEmpty"><div class="empty-ico">⚡</div><div class="empty-text">暂无活跃快速市场</div></div>
+        <table id="fmTable" style="display:none">
+          <thead><tr><th>市场</th><th>状态</th><th>YES 价格</th><th>价差</th><th>流动性</th><th>到期时间</th></tr></thead>
+          <tbody id="fmBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .shell -->
+
+<div class="toast-container" id="toasts"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   FastLoop Trading Dashboard — Client Logic
+   ═══════════════════════════════════════════════════════════ */
+
+const API_BASE = 'https://api.simmer.markets';
+const BINANCE_API = 'https://api.binance.com/api/v3';
+const REFRESH_INTERVAL = 30; // seconds
+
+let apiKey = localStorage.getItem('fl_api_key') || '';
+let connected = false;
+let refreshTimer = null;
+let lastUpdateTs = 0;
+let tickInterval = null;
+let tradeHistory = [];
+let pnlSeries = [];
+
+// ── Init ──
+(function init() {
+  if (apiKey) {
+    document.getElementById('apiKeyInput').value = '••••••••••••••••';
+    handleConnect();
+  }
+  startTicker();
+  fetchBinancePrice();
+  setInterval(fetchBinancePrice, 10000);
+})();
+
+// ── Connection ──
+function handleConnect() {
+  const input = document.getElementById('apiKeyInput');
+  const raw = input.value.trim();
+  if (raw && !raw.startsWith('••')) {
+    apiKey = raw;
+    localStorage.setItem('fl_api_key', apiKey);
+    input.value = '••••••••••••••••';
+  }
+  if (!apiKey) { toast('请输入 API Key', 'error'); return; }
+  connected = true;
+  document.getElementById('connDot').className = 'status-dot on';
+  document.getElementById('connectBtn').textContent = '已连接';
+  toast('正在连接...', 'success');
+  refreshAll();
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshAll, REFRESH_INTERVAL * 1000);
+}
+
+// ── API Fetch Helper ──
+async function apiFetch(path) {
+  try {
+    const r = await fetch(API_BASE + path, {
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    if (e.message.includes('Failed to fetch') || e.message.includes('NetworkError')) {
+      console.warn('CORS/Network error for ' + path);
+      return { _corsError: true };
+    }
+    throw e;
+  }
+}
+
+// ── Refresh All ──
+async function refreshAll() {
+  if (!apiKey) return;
+  lastUpdateTs = Date.now();
+  try {
+    await Promise.allSettled([
+      fetchPortfolio(),
+      fetchPositions(),
+      fetchTrades(),
+      fetchFastMarkets(),
+      fetchBinancePrice(),
+    ]);
+  } catch (e) { console.error('Refresh error:', e); }
+}
+
+// ── Portfolio ──
+async function fetchPortfolio() {
+  try {
+    const data = await apiFetch('/api/sdk/portfolio');
+    if (data._corsError) { handleCors(); return; }
+    const bal = data.balance_usdc ?? data.balance ?? 0;
+    document.getElementById('statBalance').textContent = '$' + fmt(bal);
+    document.getElementById('statBalanceSub').textContent = 'USDC 可用余额';
+  } catch (e) {
+    document.getElementById('statBalance').textContent = '--';
+    document.getElementById('statBalanceSub').textContent = '获取失败';
+  }
+}
+
+// ── Positions ──
+async function fetchPositions() {
+  try {
+    const data = await apiFetch('/api/sdk/positions');
+    if (data._corsError) return;
+    const positions = Array.isArray(data) ? data : (data.positions || []);
+    const fast = positions.filter(p => {
+      const q = (p.question || '').toLowerCase();
+      return q.includes('up or down') || q.includes('sprint');
+    });
+    document.getElementById('posCount').textContent = fast.length + ' 个';
+    if (fast.length === 0) {
+      document.getElementById('posEmpty').style.display = '';
+      document.getElementById('posTable').style.display = 'none';
+      return;
+    }
+    document.getElementById('posEmpty').style.display = 'none';
+    document.getElementById('posTable').style.display = '';
+    const tbody = document.getElementById('posBody');
+    tbody.innerHTML = '';
+    fast.forEach(p => {
+      const sharesY = p.shares_yes || 0, sharesN = p.shares_no || 0;
+      const side = sharesY > sharesN ? 'YES' : 'NO';
+      const shares = Math.max(sharesY, sharesN);
+      const entry = p.avg_price || p.entry_price || 0;
+      const curr = p.current_price || p.price_yes || 0;
+      const pnl = p.pnl || p.unrealized_pnl || 0;
+      const resolves = p.resolves_at || '';
+      let remaining = '--';
+      if (resolves) {
+        const diff = (new Date(resolves) - Date.now()) / 1000;
+        remaining = diff > 0 ? fmtTime(diff) : '已到期';
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)">${(p.question||'').slice(0,45)}</td>
+        <td><span class="side-tag side-${side.toLowerCase()}">${side}</span></td>
+        <td>${shares.toFixed(1)}</td>
+        <td>$${entry.toFixed(3)}</td>
+        <td>$${curr.toFixed(3)}</td>
+        <td class="${pnl >= 0 ? 'td-green' : 'td-red'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
+        <td>${remaining}</td>`;
+      tbody.appendChild(tr);
+    });
+  } catch (e) { console.error('Positions error:', e); }
+}
+
+// ── Trades ──
+async function fetchTrades() {
+  try {
+    const data = await apiFetch('/api/sdk/trades?source=sdk:fastloop&limit=50');
+    if (data._corsError) return;
+    tradeHistory = Array.isArray(data) ? data : (data.trades || []);
+    document.getElementById('histCount').textContent = tradeHistory.length + ' 笔';
+
+    // Stats
+    let wins = 0, losses = 0, totalPnl = 0, todayCount = 0;
+    const today = new Date().toISOString().slice(0, 10);
+    pnlSeries = [];
+    let cumPnl = 0;
+    tradeHistory.forEach(t => {
+      const pnl = t.pnl || t.realized_pnl || 0;
+      cumPnl += pnl;
+      pnlSeries.push(cumPnl);
+      totalPnl += pnl;
+      if (t.result === 'win' || pnl > 0) wins++;
+      else if (t.result === 'loss' || pnl < 0) losses++;
+      if ((t.created_at || '').startsWith(today)) todayCount++;
+    });
+    const total = wins + losses;
+    const winRate = total > 0 ? (wins / total * 100) : 0;
+
+    const pnlEl = document.getElementById('statPnl');
+    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + '$' + fmt(totalPnl);
+    pnlEl.className = 'stat-val ' + (totalPnl >= 0 ? 'green' : 'red');
+    document.getElementById('statPnlSub').textContent = `${wins} 胜 / ${losses} 负`;
+
+    const wrEl = document.getElementById('statWinRate');
+    wrEl.textContent = total > 0 ? winRate.toFixed(1) + '%' : '--';
+    wrEl.className = 'stat-val ' + (winRate >= 50 ? 'green' : winRate > 0 ? 'yellow' : '');
+    document.getElementById('statWinRateSub').textContent = `共 ${total} 笔已结算`;
+
+    document.getElementById('statTrades').textContent = todayCount;
+    document.getElementById('statTradesSub').textContent = `今日 (UTC)`;
+
+    // Table
+    if (tradeHistory.length === 0) {
+      document.getElementById('histEmpty').style.display = '';
+      document.getElementById('histTable').style.display = 'none';
+    } else {
+      document.getElementById('histEmpty').style.display = 'none';
+      document.getElementById('histTable').style.display = '';
+      const tbody = document.getElementById('histBody');
+      tbody.innerHTML = '';
+      tradeHistory.slice(0, 30).forEach(t => {
+        const side = (t.side || 'yes').toUpperCase();
+        const pnl = t.pnl || t.realized_pnl || 0;
+        const result = t.result || (pnl > 0 ? 'win' : pnl < 0 ? 'loss' : 'pending');
+        const resultLabel = result === 'win' ? '✓ 盈利' : result === 'loss' ? '✗ 亏损' : '⏳ 待结';
+        const resultClass = 'result-' + result;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${fmtDate(t.created_at)}</td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)">${(t.question||t.market_name||'').slice(0,35)}</td>
+          <td><span class="side-tag side-${side.toLowerCase()}">${side}</span></td>
+          <td>$${fmt(t.amount || 0)}</td>
+          <td>${(t.shares_bought || t.shares || 0).toFixed(1)}</td>
+          <td class="${resultClass}">${resultLabel}</td>
+          <td class="${pnl >= 0 ? 'td-green' : 'td-red'}">${pnl !== 0 ? (pnl > 0 ? '+' : '') + '$' + fmt(pnl) : '--'}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    drawChart();
+  } catch (e) { console.error('Trades error:', e); }
+}
+
+// ── Fast Markets ──
+async function fetchFastMarkets() {
+  try {
+    const data = await apiFetch('/api/sdk/fast-markets?asset=BTC&window=5m');
+    if (data._corsError) return;
+    const markets = Array.isArray(data) ? data : (data.markets || []);
+    document.getElementById('fmCount').textContent = markets.length + ' 个';
+    if (markets.length === 0) {
+      document.getElementById('fmEmpty').style.display = '';
+      document.getElementById('fmTable').style.display = 'none';
+      return;
+    }
+    document.getElementById('fmEmpty').style.display = 'none';
+    document.getElementById('fmTable').style.display = '';
+    const tbody = document.getElementById('fmBody');
+    tbody.innerHTML = '';
+    markets.forEach(m => {
+      const live = m.is_live_now;
+      const statusTag = live ? '<span style="color:var(--green)">● 交易中</span>' : '<span style="color:var(--text-muted)">○ 未开始</span>';
+      const price = m.external_price_yes ?? m.price_yes ?? '--';
+      const spread = m.spread_cents != null ? m.spread_cents.toFixed(1) + '¢' : '--';
+      const liq = m.liquidity_tier || '--';
+      const resolves = m.resolves_at || '';
+      let remaining = '--';
+      if (resolves) {
+        const diff = (new Date(resolves.replace(' ', 'T').replace(/Z?$/, 'Z')) - Date.now()) / 1000;
+        remaining = diff > 0 ? fmtTime(diff) : '已过期';
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)">${(m.question||'').slice(0,50)}</td>
+        <td>${statusTag}</td>
+        <td>${typeof price === 'number' ? '$' + price.toFixed(3) : price}</td>
+        <td>${spread}</td>
+        <td>${liq}</td>
+        <td>${remaining}</td>`;
+      tbody.appendChild(tr);
+    });
+  } catch (e) { console.error('FastMarkets error:', e); }
+}
+
+// ── Binance Price + Signals ──
+async function fetchBinancePrice() {
+  try {
+    const [priceR, klinesR] = await Promise.all([
+      fetch(BINANCE_API + '/ticker/price?symbol=BTCUSDT').then(r => r.json()),
+      fetch(BINANCE_API + '/klines?symbol=BTCUSDT&interval=1m&limit=15').then(r => r.json()),
+    ]);
+    const price = parseFloat(priceR.price);
+    document.getElementById('sigPrice').textContent = '$' + price.toLocaleString('en-US', {maximumFractionDigits: 2});
+    document.getElementById('sigPrice').className = 'sig-val neutral';
+
+    if (Array.isArray(klinesR) && klinesR.length >= 15) {
+      const n = klinesR.length;
+      const now = parseFloat(klinesR[n-1][4]);
+      const p5 = parseFloat(klinesR[n-5][1]);
+      const p3 = parseFloat(klinesR[n-3][1]);
+      const p15 = parseFloat(klinesR[0][1]);
+      const mom5 = ((now - p5) / p5 * 100);
+      const mom3 = ((now - p3) / p3 * 100);
+      const mom15 = ((now - p15) / p15 * 100);
+
+      const volumes = klinesR.map(k => parseFloat(k[5]));
+      const avgVol = volumes.reduce((a,b)=>a+b,0) / volumes.length;
+      const latestVol = volumes[volumes.length-1];
+      const volRatio = avgVol > 0 ? latestVol / avgVol : 1;
+
+      setSig('sigMomentum', mom5, '%');
+      setSig('sigVolume', volRatio, 'x', true);
+      setSig('sigShort', mom3, '%');
+      setSig('sigMed', mom5, '%');
+      setSig('sigLong', mom15, '%');
+
+      const shortDir = mom3 > 0 ? 'up' : 'down';
+      const medDir = mom5 > 0 ? 'up' : 'down';
+      const longDir = mom15 > 0 ? 'up' : 'down';
+      const confirmed = shortDir === medDir && medDir === longDir;
+      const badge = document.getElementById('sigMtfBadge');
+      if (confirmed) {
+        badge.textContent = '✓ 方向一致 (' + (shortDir === 'up' ? '看涨' : '看跌') + ')';
+        badge.style.color = shortDir === 'up' ? 'var(--green)' : 'var(--red)';
+        badge.style.borderColor = shortDir === 'up' ? 'var(--green)' : 'var(--red)';
+        badge.style.border = '1px solid';
+      } else {
+        badge.textContent = '✗ 方向分歧';
+        badge.style.color = 'var(--yellow)';
+        badge.style.border = '1px solid var(--yellow)';
+      }
+    }
+  } catch (e) { console.warn('Binance fetch error:', e); }
+}
+
+function setSig(id, val, suffix, isRatio) {
+  const el = document.getElementById(id);
+  if (isRatio) {
+    el.textContent = val.toFixed(2) + suffix;
+    el.className = 'sig-val ' + (val >= 1.5 ? 'up' : val < 0.5 ? 'down' : 'neutral');
+  } else {
+    el.textContent = (val >= 0 ? '+' : '') + val.toFixed(3) + suffix;
+    el.className = 'sig-val ' + (val > 0 ? 'up' : val < 0 ? 'down' : 'neutral');
+  }
+}
+
+// ── P&L Chart (Canvas) ──
+function drawChart() {
+  const canvas = document.getElementById('pnlCanvas');
+  const wrap = document.getElementById('chartWrap');
+  const empty = document.getElementById('chartEmpty');
+  document.getElementById('chartCount').textContent = pnlSeries.length + ' 笔交易';
+
+  if (pnlSeries.length < 2) { empty.style.display = ''; return; }
+  empty.style.display = 'none';
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const pad = { t: 20, r: 55, b: 25, l: 16 };
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  const series = [0, ...pnlSeries];
+  const minV = Math.min(0, ...series), maxV = Math.max(0, ...series);
+  const range = maxV - minV || 1;
+
+  const xStep = cw / (series.length - 1);
+  const yOf = v => pad.t + ch - ((v - minV) / range) * ch;
+
+  // Grid
+  ctx.strokeStyle = 'rgba(30,42,58,.6)'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + ch * i / 4;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    const label = (maxV - (range * i / 4)).toFixed(2);
+    ctx.fillStyle = '#484f58'; ctx.font = '10px IBM Plex Mono';
+    ctx.textAlign = 'right'; ctx.fillText('$' + label, w - pad.r + 48, y + 3);
+  }
+
+  // Zero line
+  if (minV < 0 && maxV > 0) {
+    const zy = yOf(0);
+    ctx.strokeStyle = 'rgba(139,148,158,.3)'; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Area fill
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + ch);
+  const lastVal = series[series.length - 1];
+  if (lastVal >= 0) {
+    grad.addColorStop(0, 'rgba(63,185,80,.18)'); grad.addColorStop(1, 'rgba(63,185,80,0)');
+  } else {
+    grad.addColorStop(0, 'rgba(248,81,73,0)'); grad.addColorStop(1, 'rgba(248,81,73,.18)');
+  }
+  ctx.beginPath(); ctx.moveTo(pad.l, yOf(0));
+  series.forEach((v, i) => ctx.lineTo(pad.l + i * xStep, yOf(v)));
+  ctx.lineTo(pad.l + (series.length - 1) * xStep, yOf(0));
+  ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  series.forEach((v, i) => { i === 0 ? ctx.moveTo(pad.l, yOf(v)) : ctx.lineTo(pad.l + i * xStep, yOf(v)); });
+  ctx.strokeStyle = lastVal >= 0 ? '#3fb950' : '#f85149'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+
+  // End dot
+  const ex = pad.l + (series.length - 1) * xStep, ey = yOf(lastVal);
+  ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+  ctx.fillStyle = lastVal >= 0 ? '#3fb950' : '#f85149'; ctx.fill();
+  ctx.beginPath(); ctx.arc(ex, ey, 7, 0, Math.PI * 2);
+  ctx.strokeStyle = lastVal >= 0 ? 'rgba(63,185,80,.3)' : 'rgba(248,81,73,.3)'; ctx.lineWidth = 2; ctx.stroke();
+}
+window.addEventListener('resize', drawChart);
+
+// ── Helpers ──
+function fmt(n) { return Math.abs(n).toFixed(2); }
+function fmtTime(s) {
+  if (s < 60) return Math.floor(s) + '秒';
+  if (s < 3600) return Math.floor(s / 60) + '分' + Math.floor(s % 60) + '秒';
+  return Math.floor(s / 3600) + '时' + Math.floor((s % 3600) / 60) + '分';
+}
+function fmtDate(iso) {
+  if (!iso) return '--';
+  try { const d = new Date(iso); return d.toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}); } catch { return iso.slice(0,16); }
+}
+
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type || '');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function handleCors() {
+  toast('⚠ CORS 错误: API 可能不支持浏览器直接访问。建议使用浏览器 CORS 扩展或代理服务。', 'error');
+}
+
+// ── Live Ticker (update counter) ──
+function startTicker() {
+  const el = document.getElementById('metaUpdate');
+  clearInterval(tickInterval);
+  tickInterval = setInterval(() => {
+    if (!lastUpdateTs) { el.textContent = '上次更新: --'; return; }
+    const ago = Math.floor((Date.now() - lastUpdateTs) / 1000);
+    el.textContent = '上次更新: ' + ago + '秒前';
+  }, 1000);
+}
+</script>
+</body>
+</html>
