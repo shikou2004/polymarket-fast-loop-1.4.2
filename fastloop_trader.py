@@ -191,6 +191,10 @@ def get_client(live=True):
             print("Get your API key from: simmer.markets/dashboard → SDK tab")
             sys.exit(1)
         venue = os.environ.get("TRADING_VENUE", "polymarket")
+        valid_venues = ("sim", "simmer", "sandbox", "polymarket", "kalshi")
+        if venue not in valid_venues:
+            print(f"Warning: TRADING_VENUE='{venue}' is invalid. Falling back to 'sim'.")
+            venue = "sim"
         _client = SimmerClient(api_key=api_key, venue=venue, live=live)
     return _client
 
