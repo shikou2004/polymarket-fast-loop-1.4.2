@@ -1,1 +1,1 @@
-worker: python fastloop_trader.py --live
+worker: python run_loop.py
