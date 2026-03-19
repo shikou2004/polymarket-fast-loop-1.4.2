@@ -74,6 +74,17 @@ CONFIG_SCHEMA = {
                        "help": "Annualised volatility for N(d) fair-value model (default: 0.55 = 55%)"},
     "order_type": {"default": "GTC", "env": "SIMMER_FASTLOOP_ORDER_TYPE", "type": str,
                    "help": "Order type for Polymarket trades: GTC (default, waits for fill) or FAK (cancel if not filled immediately)"},
+    # ── Quant-optimised params (inspired by Kroer et al. profit guarantee framework) ──
+    "kelly_fraction": {"default": 0.25, "env": "SIMMER_FASTLOOP_KELLY_FRAC", "type": float,
+                       "help": "Fractional Kelly multiplier (0.25 = quarter-Kelly, conservative)"},
+    "alpha_extraction": {"default": 0.90, "env": "SIMMER_FASTLOOP_ALPHA_EXTRACT", "type": float,
+                         "help": "Min edge extraction ratio after costs (0.90 = capture ≥90%% of gross edge)"},
+    "multi_tf_confirm": {"default": True, "env": "SIMMER_FASTLOOP_MULTI_TF", "type": bool,
+                         "help": "Require multi-timeframe momentum agreement (1m + 5m windows)"},
+    "dynamic_vol_threshold": {"default": True, "env": "SIMMER_FASTLOOP_DYN_VOL", "type": bool,
+                              "help": "Adjust entry threshold dynamically based on realised volatility"},
+    "max_slippage_pct": {"default": 0.02, "env": "SIMMER_FASTLOOP_MAX_SLIP", "type": float,
+                         "help": "Max estimated slippage as fraction of trade size"},
 }
 
 TRADE_SOURCE = "sdk:fastloop"
@@ -132,6 +143,13 @@ FAIR_VALUE_MIN_EDGE = cfg["fair_value_min_edge"]
 BTC_ANNUAL_VOL = cfg["btc_annual_vol"]
 ORDER_TYPE = cfg["order_type"].upper() if cfg["order_type"] else "GTC"
 SECONDS_PER_YEAR = 31_536_000
+
+# Quant-optimised params
+KELLY_FRACTION = cfg.get("kelly_fraction", 0.25)
+ALPHA_EXTRACTION = cfg.get("alpha_extraction", 0.90)
+MULTI_TF_CONFIRM = cfg.get("multi_tf_confirm", True)
+DYNAMIC_VOL_THRESHOLD = cfg.get("dynamic_vol_threshold", True)
+MAX_SLIPPAGE_PCT = cfg.get("max_slippage_pct", 0.02)
 
 # Polymarket crypto fee formula constants (from docs.polymarket.com/trading/fees)
 # fee = C × p × POLY_FEE_RATE × (p × (1-p))^POLY_FEE_EXPONENT
@@ -551,6 +569,127 @@ def _norm_cdf(x):
     return n if x >= 0 else 1.0 - n
 
 
+# =============================================================================
+# Quant Framework (profit guarantee, Kelly sizing, vol-adjusted thresholds)
+# =============================================================================
+
+def realized_volatility(candles):
+    """Calculate annualised realised volatility from 1-min candle closes.
+    Used to dynamically adjust entry thresholds — higher vol = wider threshold.
+    Returns annualised vol (fraction), or None if insufficient data.
+    """
+    if not candles or len(candles) < 3:
+        return None
+    try:
+        closes = [float(c[4]) for c in candles]
+        log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1] > 0]
+        if len(log_returns) < 2:
+            return None
+        mean_r = sum(log_returns) / len(log_returns)
+        var_r = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
+        std_1m = var_r ** 0.5
+        # Annualise: 1-min bars → multiply by sqrt(525600) ≈ 725.3
+        annual_vol = std_1m * (525_600 ** 0.5)
+        return annual_vol
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def kelly_position_size(edge, buy_price, balance, max_size, kelly_frac=0.25):
+    """Kelly criterion position sizing for binary outcomes.
+
+    Based on the Kelly formula for binary bets:
+      f* = (p·b - q) / b
+    where p = estimated win prob, b = net payout ratio, q = 1 - p.
+
+    Uses fractional Kelly (default 25%) for variance reduction.
+    Kroer et al. teach that execution precision matters — Kelly ensures
+    we size proportionally to our actual edge, not a fixed amount.
+
+    Returns dollar amount to risk.
+    """
+    if buy_price <= 0 or buy_price >= 1 or edge <= 0:
+        return 0.0
+    p_win = min(0.95, max(0.05, buy_price + edge))  # our estimated true probability
+    b = (1.0 - buy_price) / buy_price               # net payout ratio: win $(1-p)/p per $p risked
+    q = 1.0 - p_win
+    kelly_f = (p_win * b - q) / b if b > 0 else 0
+    kelly_f = max(0, kelly_f)
+    # Fractional Kelly
+    kelly_size = balance * kelly_f * kelly_frac
+    return max(0, min(kelly_size, max_size))
+
+
+def guaranteed_profit_check(edge, buy_price, amount, fee_rate, spread_pct, alpha=0.90):
+    """Profit guarantee inspired by Kroer et al. Proposition 4.1.
+
+    In their framework: Guaranteed Profit = D(μ||θ) - g(μ)
+    Trade only when capturing ≥ α fraction of gross edge after all costs.
+
+    Adapted for single-market binary options:
+      gross_ev   = shares × edge           (analogous to D(μ||θ))
+      total_cost = fees + slippage          (analogous to g(μ), the optimality gap)
+      net_ev     = gross_ev - total_cost
+      extraction = net_ev / gross_ev        (≥ α to proceed)
+
+    Returns (net_ev, extraction_ratio, should_trade).
+    """
+    if buy_price <= 0 or amount <= 0 or edge <= 0:
+        return 0, 0, False
+    shares = amount / buy_price
+    gross_ev = shares * edge
+    # Costs
+    fee_cost = amount * fee_rate
+    slippage_cost = amount * spread_pct * 0.5  # lose ~half the spread
+    total_cost = fee_cost + slippage_cost
+    net_ev = gross_ev - total_cost
+    extraction = net_ev / gross_ev if gross_ev > 0 else 0
+    should_trade = net_ev > 0 and extraction >= alpha
+    return net_ev, extraction, should_trade
+
+
+def get_multi_timeframe_signal(symbol, short_lookback=3, long_lookback=15):
+    """Multi-timeframe momentum confirmation.
+
+    Fetches a longer window of 1-min candles and computes:
+      - Short-term momentum (last 3 min) — captures impulse
+      - Medium-term momentum (last 5 min) — default signal
+      - Long-term momentum (last 15 min) — trend context
+
+    All timeframes must agree on direction for confirmation.
+    Returns dict with directions and confirmation flag, or None on failure.
+    """
+    candles = _binance_klines(symbol, interval="1m", limit=max(long_lookback, 15))
+    if not candles or len(candles) < long_lookback:
+        return None
+    try:
+        def _momentum(start_idx, end_idx):
+            p0 = float(candles[start_idx][1])  # open
+            p1 = float(candles[end_idx][4])     # close
+            return ((p1 - p0) / p0) * 100 if p0 > 0 else 0
+
+        n = len(candles)
+        short_mom = _momentum(max(0, n - short_lookback), n - 1)
+        med_mom = _momentum(max(0, n - 5), n - 1)
+        long_mom = _momentum(0, n - 1)
+
+        short_dir = "up" if short_mom > 0 else "down"
+        med_dir = "up" if med_mom > 0 else "down"
+        long_dir = "up" if long_mom > 0 else "down"
+
+        confirmed = (short_dir == med_dir == long_dir)
+
+        return {
+            "short_mom": short_mom, "short_dir": short_dir,
+            "med_mom": med_mom, "med_dir": med_dir,
+            "long_mom": long_mom, "long_dir": long_dir,
+            "confirmed": confirmed,
+            "candles_raw": candles,
+        }
+    except (IndexError, ValueError):
+        return None
+
+
 def get_binance_price_at(symbol, start_ms):
     """Get BTC close price of the 1-minute candle starting at start_ms (unix ms).
     Used to fetch the reference price at market open for the N(d) model."""
@@ -689,6 +828,10 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
     log(f"  Lookback:         {LOOKBACK_MINUTES} minutes")
     log(f"  Min time left:    {MIN_TIME_REMAINING}s")
     log(f"  Volume weighting: {'✓' if VOLUME_CONFIDENCE else '✗'}")
+    log(f"  Kelly sizing:     {'✓' if KELLY_FRACTION > 0 else '✗'} ({KELLY_FRACTION:.0%} Kelly)")
+    log(f"  Profit guarantee: α≥{ALPHA_EXTRACTION:.0%} extraction")
+    log(f"  Multi-TF confirm: {'✓' if MULTI_TF_CONFIRM else '✗'}")
+    log(f"  Dynamic vol:      {'✓' if DYNAMIC_VOL_THRESHOLD else '✗'}")
     daily_spend = _load_daily_spend(__file__)
     log(f"  Daily budget:     ${DAILY_BUDGET:.2f} (${daily_spend['spent']:.2f} spent today, {daily_spend['trades']} trades)")
 
@@ -807,7 +950,7 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
         _eff = POLY_FEE_RATE * (_p * (1 - _p)) ** POLY_FEE_EXPONENT
         log(f"  Fee rate:         {_eff:.2%} effective at current price (feeRateBps={fee_rate_bps})")
 
-    # Step 3: Get CEX price momentum
+    # Step 3: Get CEX price momentum (with optional multi-timeframe confirmation)
     log(f"\n📈 Fetching {ASSET} price signal ({SIGNAL_SOURCE})...")
     momentum = get_momentum(ASSET, SIGNAL_SOURCE, LOOKBACK_MINUTES)
 
@@ -820,6 +963,30 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
     log(f"  Direction: {momentum['direction']}")
     if VOLUME_CONFIDENCE:
         log(f"  Volume ratio: {momentum['volume_ratio']:.2f}x avg")
+
+    # Multi-timeframe confirmation (Kroer insight: faster detection + trend alignment)
+    _mtf_data = None
+    if MULTI_TF_CONFIRM:
+        _fv_symbol = ASSET_SYMBOLS.get(ASSET, "BTCUSDT")
+        _mtf_data = get_multi_timeframe_signal(_fv_symbol, short_lookback=3, long_lookback=15)
+        if _mtf_data:
+            log(f"  Multi-TF: short={_mtf_data['short_mom']:+.3f}% "
+                f"med={_mtf_data['med_mom']:+.3f}% "
+                f"long={_mtf_data['long_mom']:+.3f}% "
+                f"{'✓ confirmed' if _mtf_data['confirmed'] else '✗ divergent'}")
+
+    # Dynamic volatility threshold: scale entry threshold by realized vol ratio
+    _dynamic_entry = ENTRY_THRESHOLD
+    _dynamic_momentum = MIN_MOMENTUM_PCT
+    if DYNAMIC_VOL_THRESHOLD and _mtf_data and _mtf_data.get("candles_raw"):
+        _rv = realized_volatility(_mtf_data["candles_raw"])
+        if _rv is not None:
+            # Compare realised vol to configured annual vol — scale thresholds
+            _vol_ratio = _rv / BTC_ANNUAL_VOL if BTC_ANNUAL_VOL > 0 else 1.0
+            _vol_ratio = max(0.5, min(2.0, _vol_ratio))  # clamp to 0.5x-2x
+            _dynamic_entry = ENTRY_THRESHOLD * _vol_ratio
+            _dynamic_momentum = MIN_MOMENTUM_PCT * _vol_ratio
+            log(f"  Realised vol: {_rv:.2%} annual (ratio {_vol_ratio:.2f}x → entry≥{_dynamic_entry:.3f}, momentum≥{_dynamic_momentum:.3f}%)")
 
     # Step 4: Decision logic
     log(f"\n🧠 Analyzing...")
@@ -839,6 +1006,7 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
 
     # Check order book spread and depth
     # Use pre-fetched spread from Simmer API if available, otherwise fetch from CLOB
+    book = None
     pre_spread = best.get("spread_cents")
     if pre_spread is not None:
         # spread_cents is raw cents (e.g. 2.5 = 2.5¢). Convert to fraction of midpoint
@@ -867,11 +1035,21 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
                 return
 
     # Check minimum momentum (loose gate when fair-value mode is on — edge check filters there)
-    _momentum_floor = 0.01 if USE_FAIR_VALUE else MIN_MOMENTUM_PCT
+    _momentum_floor = 0.01 if USE_FAIR_VALUE else _dynamic_momentum
     if momentum_pct < _momentum_floor:
-        log(f"  ⏸️  Momentum {momentum_pct:.3f}% < minimum {_momentum_floor}% — skip")
+        log(f"  ⏸️  Momentum {momentum_pct:.3f}% < minimum {_momentum_floor:.3f}% — skip")
         if not quiet:
             print(f"📊 Summary: No trade (momentum too weak: {momentum_pct:.3f}%)")
+        return
+
+    # Multi-timeframe gate: skip if timeframes disagree (reduces false signals)
+    if MULTI_TF_CONFIRM and _mtf_data and not _mtf_data["confirmed"]:
+        log(f"  ⏸️  Multi-timeframe disagreement (short={_mtf_data['short_dir']}, "
+            f"med={_mtf_data['med_dir']}, long={_mtf_data['long_dir']}) — skip")
+        if not quiet:
+            print(f"📊 Summary: No trade (multi-TF divergence)")
+        skip_reasons.append("multi-TF disagreement")
+        _emit_skip_report()
         return
 
     # Decision logic: fair-value model or raw momentum
@@ -939,11 +1117,11 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
         # Simple model: strong momentum → higher probability of continuation
         if direction == "up":
             side = "yes"
-            divergence = 0.50 + ENTRY_THRESHOLD - market_yes_price
+            divergence = 0.50 + _dynamic_entry - market_yes_price
             trade_rationale = f"{ASSET} up {momentum['momentum_pct']:+.3f}% but YES only ${market_yes_price:.3f}"
         else:
             side = "no"
-            divergence = market_yes_price - (0.50 - ENTRY_THRESHOLD)
+            divergence = market_yes_price - (0.50 - _dynamic_entry)
             trade_rationale = f"{ASSET} down {momentum['momentum_pct']:+.3f}% but YES still ${market_yes_price:.3f}"
 
     # Volume confidence adjustment
@@ -967,30 +1145,64 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
         _emit_skip_report()
         return
 
-    # Fee-aware EV check: require enough divergence to cover fees
-    # EV = win_prob * payout_after_fees - (1 - win_prob) * cost
-    # At the buy price, win_prob ≈ buy_price (market-implied).
-    # We need our edge (divergence) to overcome the fee drag.
+    # Fee-aware profit guarantee (Kroer et al. framework: trade only when net EV > 0 AND extraction ≥ α)
+    # This replaces the simple fee check with the full profit guarantee:
+    #   Guaranteed Profit = D(μ||θ) - g(μ) ≥ α × D(μ||θ)
+    # Adapted: gross_ev - costs ≥ α × gross_ev
     if fee_rate_bps > 0:
         buy_price = market_yes_price if side == "yes" else (1 - market_yes_price)
-        # Polymarket crypto fee: fee = C × p × 0.25 × (p × (1-p))^2
-        # Effective rate = 0.25 × (p × (1-p))^2. Fee per share = buy_price × eff_rate.
+        # Polymarket crypto fee formula
         effective_fee_rate = POLY_FEE_RATE * (buy_price * (1 - buy_price)) ** POLY_FEE_EXPONENT
-        fee_per_share = buy_price * effective_fee_rate  # absolute fee in price terms
-        # Divergence is in absolute price — compare to fee drag + buffer
-        min_divergence = fee_per_share * 2 + 0.02  # round-trip fee + buffer
-        log(f"  Fee:              ${fee_per_share:.4f}/share ({effective_fee_rate:.2%} effective, min divergence {min_divergence:.3f})")
-        if divergence < min_divergence:
-            log(f"  ⏸️  Divergence {divergence:.3f} < fee-adjusted minimum {min_divergence:.3f} — skip")
+        # Estimate spread from order book or pre-fetched data
+        _spread_est = 0.0
+        if pre_spread is not None:
+            _spread_est = (pre_spread / 100.0) / (market_yes_price if market_yes_price > 0 else 0.5)
+        elif book:
+            _spread_est = book.get("spread_pct", 0)
+
+        _test_amount = MAX_POSITION_USD
+        net_ev, extraction, should_trade = guaranteed_profit_check(
+            edge=divergence, buy_price=buy_price, amount=_test_amount,
+            fee_rate=effective_fee_rate, spread_pct=_spread_est,
+            alpha=ALPHA_EXTRACTION)
+
+        log(f"  Profit guarantee: net_EV=${net_ev:.4f} extraction={extraction:.1%} (α≥{ALPHA_EXTRACTION:.0%})")
+        log(f"  Fee:              {effective_fee_rate:.2%} effective (feeRateBps={fee_rate_bps})")
+
+        if not should_trade:
+            if net_ev <= 0:
+                log(f"  ⏸️  Negative EV after costs (net=${net_ev:.4f}) — skip")
+                reason = "negative EV after costs"
+            else:
+                log(f"  ⏸️  Extraction {extraction:.1%} < α={ALPHA_EXTRACTION:.0%} (costs eat too much edge) — skip")
+                reason = "extraction below alpha"
             if not quiet:
-                print(f"📊 Summary: No trade (fees eat the edge)")
-            skip_reasons.append("fees eat the edge")
+                print(f"📊 Summary: No trade ({reason})")
+            skip_reasons.append(reason)
             _emit_skip_report()
             return
 
     # We have a signal!
-    position_size = calculate_position_size(MAX_POSITION_USD, smart_sizing)
+    # Kelly criterion position sizing (Kroer et al.: execution precision matters)
     price = market_yes_price if side == "yes" else (1 - market_yes_price)
+
+    if KELLY_FRACTION > 0 and divergence > 0 and price > 0:
+        # Use Kelly sizing: scale position to edge magnitude
+        _balance = DAILY_BUDGET  # use daily budget as bankroll proxy
+        if smart_sizing:
+            portfolio = get_portfolio()
+            if portfolio and not portfolio.get("error"):
+                _balance = max(_balance, portfolio.get("balance_usdc", 0))
+        position_size = kelly_position_size(
+            edge=divergence, buy_price=price, balance=_balance,
+            max_size=MAX_POSITION_USD, kelly_frac=KELLY_FRACTION)
+        log(f"  Kelly sizing: ${position_size:.2f} ({KELLY_FRACTION:.0%} Kelly, edge={divergence:.3f})")
+        if position_size < 0.50:
+            # Kelly says the edge is too small for meaningful sizing
+            position_size = 0.50  # minimum trade
+            log(f"  Kelly → floor ($0.50 min)")
+    else:
+        position_size = calculate_position_size(MAX_POSITION_USD, smart_sizing)
 
     # Daily budget check
     remaining_budget = DAILY_BUDGET - daily_spend["spent"]
@@ -1045,6 +1257,8 @@ def run_fast_market_strategy(dry_run=True, positions_only=False, show_config=Fal
         "signal_source": SIGNAL_SOURCE,
         "market_price": round(market_yes_price, 4),
         "window_minutes": LOOKBACK_MINUTES,
+        "kelly_fraction": KELLY_FRACTION,
+        "multi_tf_confirmed": _mtf_data["confirmed"] if _mtf_data else None,
     }
     if USE_FAIR_VALUE and 'fair_yes' in locals():
         _signal_data["fair_value"] = round(fair_yes, 4)
